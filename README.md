@@ -15,6 +15,16 @@ npm start
 
 Accessible on port 3000 by default, configurable
 
+Testing
+=======
+
+Assumes shell access and cURL being present
+
+ * Make sure that instance is running on http://localhost:3000
+ * Navigate into the app directory
+ * Type in "sh test.sh", this will create a test_results direcotry
+ * Go to the created directory and check out the resulting images
+
 GOTCHAS
 =======
 
@@ -24,12 +34,12 @@ GOTCHAS
 TODO
 ====
 
- * Make sure that running multiple PhantomJS instances at the same time is possible without explicitly setting different ports to be used
- * Set better logging with configuration options and possibility to log into files
+ * Make sure that running multiple PhantomJS instances at the same time is possible without explicitly setting different ports to be used (seems running just fine but should probably be battle tested)
  * Better handling of errors
  * Need to make sure how does it behave under load (especially how PhantomJS behaves under heavy load)
  * Better documentation
  * Cache for already loaded images (provided all the parameters are the same)
+ * Better test cases that would emulate heavy load
 
  LICENSE
  =======
