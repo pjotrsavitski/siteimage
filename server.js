@@ -55,7 +55,7 @@ server.use(restify.bodyParser({ mapParams: false }));
  * Setting up logging of exceptions. This will allow debugging.
  */
 server.on('uncaughtException', function (req, res, route, err) {
-    req.log.error('uncaughtException', err);
+    req.log.error(err);
 });
 
 /**
