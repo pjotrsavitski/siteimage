@@ -4,12 +4,29 @@ var path = require('path');
 var lib = require('./lib.js');
 var validator = require('validator');
 var genericpool = require('generic-pool');
+var bunyan = require('bunyan');
+
+var log = bunyan.createLogger({
+  name: 'SiteImage',
+  streams: [
+    {
+      level: 'info',
+      stream: process.stdout
+    },
+    {
+      level: 'error',
+      path: path.join(__dirname, 'logs/error.log')
+    }
+  ]
+  });
 
 var pool = genericpool.Pool({
   name: 'phantomjs',
   create: function(callback) {
-    // TODO Need to set different ports
-    // XXX This is important
+    // TODO Need to check if different ports have to be provided
+
+    // The PhantomJS used will be installed into local node_modules and passed
+    // in during configuration
     phantom.create(function(ph) {
       callback(null, ph);
     }, {
@@ -25,15 +42,25 @@ var pool = genericpool.Pool({
   log: false
 });
 
-var server = restify.createServer();
+var server = restify.createServer({
+  log: log,
+  name: 'SiteImage',
+  varsion: '0.0.1'
+});
 
 server.use(restify.bodyParser({ mapParams: false }));
 
 // TODO Need better confugurable logging
+/**
+ * Setting up logging of exceptions. This will allow debugging.
+ */
 server.on('uncaughtException', function (req, res, route, err) {
-    console.log('uncaughtException', err.stack);
+    req.log.error('uncaughtException', err);
 });
 
+/**
+ * Respond with JSON encoded description of API (GET)
+ */
 server.get('/', function(req, res, next) {
   res.json(200, {
     "api": {
@@ -46,10 +73,10 @@ server.get('/', function(req, res, next) {
         "description": "Captures provided address",
         "body": {
           "pageUrl": "URL of the page to capture (required)",
-          "viewportWidth": "Viewport width to set for capturable (optional)",
-          "viewportHeight": "Viewport height to set for capturable (optional)",
+          "viewportWidth": "Viewport width to set for capturable (optional), supports range 320 - 1024",
+          "viewportHeight": "Viewport height to set for capturable (optional), support range 240 - 768",
           "imageFormat": "A format for the returned image (optional defaults to png), png or jpeg",
-          "responseFormat": "A response format returned (optional defaults to base64), base64 or binary"
+          "responseFormat": "A response format returned (optional defaults to base64), base64 or binary. Includes data:image/<format>;base64, string in the beginning"
         }
       }
     }
@@ -57,6 +84,15 @@ server.get('/', function(req, res, next) {
   return next();
 });
 
+/**
+ * Tries to capture the screenshot based on provided data. Uses meaningful
+ * defaults. Error responses will be served as default application/json type
+ * of response.
+ * In case of binary the image will be delivered as binary data with correct
+ * header being set.
+ * For base64 encoded response an application/octet-stream will be set returning
+ * the data (please note that data:image<format>;base64, will be prepended).
+ */
 server.post('/capture', function(req, res, next) {
   if (!req.body) {
     return next(new restify.MissingParameterError('pageUrl is required!'));
@@ -91,6 +127,8 @@ server.post('/capture', function(req, res, next) {
     }
     ph.createPage(function(page) {
       page.set('viewportSize', { width: viewportWidth, height: viewportHeight });
+      // Setting viewport size does not always work, cropping to dimensions
+      page.set('clipRect', { top: 0, left: 0, width: viewportWidth, height: viewportHeight });
       page.open(pageUrl, function(status) {
 
         if ('success' !== status) {
@@ -115,17 +153,20 @@ server.post('/capture', function(req, res, next) {
           });
         });
     });
-  }, {
-    path: path.join(__dirname, 'node_modules/phantomjs/bin/'),
-    parameters:{ 'ignore-ssl-errors':'yes' }
-    }
-  );
+  });
 });
 
+/**
+ * Run the server, default to port 3000
+ */
 server.listen(process.env.PORT || 3000, function() {
-  console.log('%s listening at %s', server.name, server.url);
+  log.info('%s listening at %s', server.name, server.url);
 });
 
+/**
+ * Sets up listener for process exit event.
+ * Will make sure to destroy any PhantomJS instances in the pool
+ */
 process.on('exit', function() {
   pool.drain(function() {
     pool.destroyAllNow();
