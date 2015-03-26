@@ -5,6 +5,7 @@ var lib = require('./lib.js');
 var validator = require('validator');
 var genericpool = require('generic-pool');
 var bunyan = require('bunyan');
+var binaryFormatter = require('restify/lib/formatters/binary.js');
 
 var log = bunyan.createLogger({
   name: 'SiteImage',
@@ -45,7 +46,11 @@ var pool = genericpool.Pool({
 var server = restify.createServer({
   log: log,
   name: 'SiteImage',
-  varsion: '0.0.1'
+  varsion: '0.0.1',
+  formatters: {
+    'image/png; q=0.9': binaryFormatter,
+    'image/jpeg; q=0.9': binaryFormatter
+  }
 });
 
 server.use(restify.bodyParser({ mapParams: false }));
@@ -121,10 +126,26 @@ server.post('/capture', function(req, res, next) {
     responseFormat = 'base64';
   }
 
-  pool.acquire(function(err, ph) {
+  var timedOut = false;
+  var timeoutId = setTimeout(function() {
+    timedOut = true;
+    return next(new restify.RequestTimeoutError('No free handlers available!'));
+  }, 60000);
+
+  var acquiredpool.acquire(function(err, ph) {
     if (err) {
-      return next(new restify.TooManyRequestsError('No free handlers available!'));
+      req.log.error(err);
+      return next(new restify.InternalServerError('Could not acquire phantomjs instance!'));
     }
+
+    // Check if already timed out
+    if (timedOut) {
+      pool.release(ph);
+      return;
+    } else {
+      clearTimeout(timeoutId);
+    }
+
     ph.createPage(function(page) {
       page.set('viewportSize', { width: viewportWidth, height: viewportHeight });
       // Setting viewport size does not always work, cropping to dimensions
