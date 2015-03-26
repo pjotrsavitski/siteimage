@@ -132,7 +132,7 @@ server.post('/capture', function(req, res, next) {
     return next(new restify.RequestTimeoutError('No free handlers available!'));
   }, 60000);
 
-  var acquiredpool.acquire(function(err, ph) {
+  pool.acquire(function(err, ph) {
     if (err) {
       req.log.error(err);
       return next(new restify.InternalServerError('Could not acquire phantomjs instance!'));
