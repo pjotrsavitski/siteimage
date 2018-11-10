@@ -1,6 +1,6 @@
 {
   "name": "siteimage",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Responds with site image, using Phantom.js",
   "main": "server.js",
   "scripts": {
@@ -13,11 +13,12 @@
     "url": "git@github.com:pjotrsavitski/siteimage.git"
   },
   "dependencies": {
-    "bunyan": "^1.3.4",
-    "generic-pool": "^2.1.1",
-    "phantom": "^0.7.2",
-    "phantomjs": "^1.9.16",
-    "restify": "^3.0.1",
-    "validator": "^3.34.0"
+    "bunyan": "^1.8.12",
+    "generic-pool": "^3.4.2",
+    "phantom": "^6.0.3",
+    "phantomjs-prebuilt": "^2.1.16",
+    "restify": "^7.2.2",
+    "restify-errors": "^6.1.1",
+    "validator": "^10.9.0"
   }
 }

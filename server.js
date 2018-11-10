@@ -1,13 +1,16 @@
-var restify = require('restify');
-var phantom = require('phantom');
-var path = require('path');
-var lib = require('./lib.js');
-var validator = require('validator');
-var genericpool = require('generic-pool');
-var bunyan = require('bunyan');
-var binaryFormatter = require('restify/lib/formatters/binary.js');
+"use strict";
 
-var log = bunyan.createLogger({
+const restify = require('restify');
+const restifyErrors = require('restify-errors');
+const phantom = require('phantom');
+const path = require('path');
+const lib = require('./lib.js');
+const validator = require('validator');
+const genericPool = require('generic-pool');
+const bunyan = require('bunyan');
+const binaryFormatter = require('restify/lib/formatters/binary.js');
+
+const log = bunyan.createLogger({
   name: 'SiteImage',
   streams: [
     {
@@ -19,31 +22,22 @@ var log = bunyan.createLogger({
       path: path.join(__dirname, 'logs/error.log')
     }
   ]
-  });
+});
 
-var pool = genericpool.Pool({
-  name: 'phantomjs',
-  create: function(callback) {
-    // TODO Need to check if different ports have to be provided
-
-    // The PhantomJS used will be installed into local node_modules and passed
-    // in during configuration
-    phantom.create(function(ph) {
-      callback(null, ph);
-    }, {
-      path: path.join(__dirname, 'node_modules/phantomjs/bin/'),
-      parameters:{ 'ignore-ssl-errors':'yes' }
-      }
-    );
+const pool = genericPool.createPool({
+  create: function() {
+    return phantom.create(['--ignore-ssl-errors=true'], path.join(__dirname, 'node_modules/phantomjs-prebuilt/bin/'));
   },
-  destroy: function(ph) { ph.exit(); },
+  destroy: function(ph) {
+    return ph.exit();
+  }
+}, {
   max: 10,
-  //min: 2,
   idleTimeoutMillis: 30000,
   log: false
 });
 
-var server = restify.createServer({
+const server = restify.createServer({
   log: log,
   name: 'SiteImage',
   varsion: '0.0.1',
@@ -53,14 +47,14 @@ var server = restify.createServer({
   }
 });
 
-server.use(restify.bodyParser({ mapParams: false }));
+server.use(restify.plugins.bodyParser({ mapParams: false }));
 
 // TODO Need better confugurable logging
 /**
  * Setting up logging of exceptions. This will allow debugging.
  */
 server.on('uncaughtException', function (req, res, route, err) {
-    req.log.error(err);
+    req.log.error(path, err);
 });
 
 /**
@@ -100,7 +94,7 @@ server.get('/', function(req, res, next) {
  */
 server.post('/capture', function(req, res, next) {
   if (!req.body) {
-    return next(new restify.MissingParameterError('pageUrl is required!'));
+    return next(new restifyErrors.MissingParameterError('pageUrl is required!'));
   }
 
   var pageUrl = req.body.pageUrl ? req.body.pageUrl : null,
@@ -110,35 +104,34 @@ server.post('/capture', function(req, res, next) {
   responseFormat = req.body.responseFormat? req.body.responseFormat.toLowerCase() : 'base64';
 
   if (!pageUrl) {
-    return next(new restify.MissingParameterError('pageUrl is required!'));
+    return next(new restifyErrors.MissingParameterError('pageUrl is required!'));
   } else if (!validator.isURL(pageUrl, ['http', 'https'])) {
-    return next(new restify.MissingParameterError('pageUrl value provided is not a valid URL!'));
+    return next(new restifyErrors.MissingParameterError('pageUrl value provided is not a valid URL!'));
   }
 
   viewportWidth = lib.applyIntegerBoundaries(320, 1024, viewportWidth);
   viewportHeight = lib.applyIntegerBoundaries(240, 768, viewportHeight);
 
-  if (['png', 'jpeg'].indexOf(imageFormat) === -1) {
-    imageFormat = 'png';
-  }
-
-  if (['base64', 'binary'].indexOf(responseFormat) === -1) {
-    responseFormat = 'base64';
-  }
+  imageFormat = lib.getCheckedOption(['png', 'jpeg'], 'png', imageFormat);
+  responseFormat = lib.getCheckedOption(['base64', 'binary'], 'base64', responseFormat);
 
   var timedOut = false;
   var timeoutId = setTimeout(function() {
     timedOut = true;
-    return next(new restify.RequestTimeoutError('No free handlers available!'));
+    return next(new restifyErrors.RequestTimeoutError('No free handlers available!'));
   }, 60000);
 
-  pool.acquire(function(err, ph) {
-    if (err) {
+  (async function() {
+    let ph, page, status, data;
+
+    try {
+      ph = await pool.acquire();
+    } catch (err) {
       req.log.error(err);
-      return next(new restify.InternalServerError('Could not acquire phantomjs instance!'));
+      return next(new restifyErrors.InternalServerError('Could not acquire phantomjs instance!'));
     }
 
-    // Check if already timed out
+    // Return to pool if request has already timed out
     if (timedOut) {
       pool.release(ph);
       return;
@@ -146,35 +139,49 @@ server.post('/capture', function(req, res, next) {
       clearTimeout(timeoutId);
     }
 
-    ph.createPage(function(page) {
-      page.set('viewportSize', { width: viewportWidth, height: viewportHeight });
-      // Setting viewport size does not always work, cropping to dimensions
-      page.set('clipRect', { top: 0, left: 0, width: viewportWidth, height: viewportHeight });
-      page.open(pageUrl, function(status) {
+    try {
+      page = await ph.createPage();
+    } catch (err) {
+      req.log.error(err);
+      return next(new restifyErrors.ResourceNotFoundError('Provided pageUrl could not be opened!'));
+    }
 
-        if ('success' !== status) {
-          page.close();
-          pool.release(ph);
-          return next(new restify.ResourceNotFoundError('Provided pageUrl could not be opened!'));
-        }
+    page.property('viewportSize', { width: viewportWidth, height: viewportHeight });
+    page.property('clipRect', { top: 0, left: 0, width: viewportWidth, height: viewportHeight });
 
-        page.renderBase64(imageFormat.toUpperCase(), function(data) {
-          if ('binary' === responseFormat) {
-            var buf = new Buffer(data, 'base64');
-            res.setHeader('content-type', 'image/' + imageFormat);
-            res.setHeader('content-length', buf.length);
-            res.send(buf);
-          } else if ('base64' === responseFormat) {
-            res.set('content-type', 'application/octet-stream');
-            res.send('data:image/' + imageFormat + ';base64,' + data);
-          }
-          page.close();
-          pool.release(ph);
-          return next();
-          });
-        });
-    });
-  });
+    try {
+      status = await page.open(pageUrl);
+    } catch (err) {
+      req.log.error(err);
+      return next(new restifyErrors.ResourceNotFoundError('Provided pageUrl could not be opened!'));
+    }
+
+    if ('success' !== status) {
+      page.close();
+      pool.release(ph);
+      return next(new restifyErrors.ResourceNotFoundError('Provided pageUrl could not be opened!'));
+    }
+
+    try {
+      data = await page.renderBase64(imageFormat.toUpperCase());
+    } catch(err) {
+      req.log.error(err);
+      return next(new restifyErrors.InternalServerError('Could not get image data!'));
+    }
+
+    if ('binary' === responseFormat) {
+      var buf = new Buffer(data, 'base64');
+      res.setHeader('content-type', 'image/' + imageFormat);
+      res.setHeader('content-length', buf.length);
+      res.send(buf);
+    } else if ('base64' === responseFormat) {
+      res.set('content-type', 'application/octet-stream');
+      res.send('data:image/' + imageFormat + ';base64,' + data);
+    }
+    page.close();
+    pool.release(ph);
+    return next();
+  })();
 });
 
 /**
@@ -189,7 +196,7 @@ server.listen(process.env.PORT || 3000, function() {
  * Will make sure to destroy any PhantomJS instances in the pool
  */
 process.on('exit', function() {
-  pool.drain(function() {
-    pool.destroyAllNow();
+  pool.drain().then(function() {
+    pool.clear();
   });
 });
